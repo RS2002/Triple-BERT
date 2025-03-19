@@ -1,3 +1,5 @@
+from itertools import compress
+
 from Worker import Buffer, Worker
 from Platform import Platform, reward_func_generator, assign
 from Order_Env import Demand
@@ -26,7 +28,9 @@ def get_args():
     parser.add_argument('--order_threshold', type=float, default=40.0)
     parser.add_argument('--reward_parameter', type=float, nargs='+', default=[10.0,5.0,2.0,3.0,1.0,2.0])
 
-    parser.add_argument("--hour", type=int, default=7)
+    parser.add_argument("--day", type=int, default=17)
+    parser.add_argument("--hour", type=int, default=18)
+    parser.add_argument("--compression", action="store_true",default=False)
 
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument("--bi_direction", action="store_true",default=False)
@@ -54,10 +58,15 @@ def main():
     device_name = "cuda:" + args.cuda
     device = torch.device(device_name if torch.cuda.is_available() and not args.cpu else 'cpu')
 
+    day = args.day
     hour = args.hour
     exploration_rate = args.epsilon
     epsilon_decay_rate = args.epsilon_decay_rate
     epsilon_final = args.epsilon_final
+
+    compression = args.compression
+    if compression:
+        args.max_step = args.max_step // 2
 
 
     with open(args.zone_dic_path, 'rb') as f:
@@ -67,7 +76,7 @@ def main():
     platform = Platform(discount_factor=args.gamma, njobs=args.njobs)
     demand = Demand(demand_path=args.demand_path, zone_table=zone_table)
     buffer = Buffer(capacity=args.buffer_capacity, episode_capacity=args.buffer_episode)
-    worker = Worker(buffer, lr=args.lr, gamma=args.gamma, max_step=args.max_step, num=args.worker_num, device=device, zone_table_path = args.zone_dic_path, model_path = args.model_path, njobs = args.njobs, bi_direction = args.bi_direction, dropout = args.dropout)
+    worker = Worker(buffer, lr=args.lr, gamma=args.gamma, max_step=args.max_step, num=args.worker_num, device=device, zone_table_path = args.zone_dic_path, model_path = args.model_path, njobs = args.njobs, bi_direction = args.bi_direction, dropout = args.dropout, compression = compression)
     reward_func = reward_func_generator(args.reward_parameter, args.order_threshold)
 
     best_reward = -1e8
@@ -82,7 +91,7 @@ def main():
 
         worker.reset(train=True)
         platform.reset(discount_factor=args.gamma)
-        demand.reset(hour=hour, wait_time=args.order_max_wait_time)
+        demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression)
 
         loss_list = []
         pbar = tqdm.tqdm(range(args.max_step))
@@ -102,6 +111,7 @@ def main():
                 loss_list.append(loss)
         # loss = worker.train(args.batch_size,args.train_times)
         loss = np.mean(loss_list)
+        worker.schedule.step()
 
         Pickup_Num = platform.Pickup_Num
         Detour = np.mean(worker.Detour_Time)
@@ -119,7 +129,7 @@ def main():
         if j % args.eval_episode == 0 :
             worker.reset(train=False)
             platform.reset(discount_factor=args.gamma)
-            demand.reset(hour=hour, wait_time=args.order_max_wait_time)
+            demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression)
 
             pbar = tqdm.tqdm(range(args.max_step))
             for t in pbar:

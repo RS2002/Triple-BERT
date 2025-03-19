@@ -158,7 +158,7 @@ def norm(order_state, worker_state, history_order_state, lat_min = 40.6887842155
     return order_state, worker_state, history_order_state
 
 class Worker():
-    def __init__(self, buffer, lr=0.0001, gamma=0.99, max_step=60, num=1000, device=None, zone_table_path = "./data/Manhattan_dic.pkl", model_path = None, njobs = 24, bi_direction = True, dropout = 0.0):
+    def __init__(self, buffer, lr=0.0001, gamma=0.99, max_step=60, num=1000, device=None, zone_table_path = "./data/Manhattan_dic.pkl", model_path = None, njobs = 24, bi_direction = True, dropout = 0.0, compression = False):
         super().__init__()
         self.buffer = buffer
 
@@ -174,7 +174,12 @@ class Worker():
         self.coordinate_lookup_lon = np.array(self.zone_dic["centroid_lon"])
         self.zone_map = np.array(self.zone_dic["map"])
 
-        bertconfig_actor = BertConfig(max_position_embeddings=1500, hidden_size=64, num_hidden_layers=4, num_attention_heads=4, position_embedding_type="none")
+        if compression:
+            max_len = 2200
+        else:
+            max_len = 1500
+
+        bertconfig_actor = BertConfig(max_position_embeddings=max_len, hidden_size=64, num_hidden_layers=4, num_attention_heads=4, position_embedding_type="none")
         bertconfig_critic = BertConfig(max_position_embeddings=1000, hidden_size=128, num_hidden_layers=4, num_attention_heads=4, position_embedding_type="none")
 
         self.AC_training = AC_BERT(bertconfig_actor, bertconfig_critic, state_size=6, history_order_size=5, current_order_size=5, hidden_dim=64, agent_num=1000, bi_direction=bi_direction, dropout=dropout).to(device)
@@ -353,7 +358,7 @@ class Worker():
     #     return np.mean(loss_list)
 
 
-    def train(self,batch_size=16, train_times=1, show_pbar=False, train_actor=False, train_critic=True):
+    def train(self, batch_size=8, train_times=1, show_pbar=False, train_actor=False, train_critic=True):
         actor_rate = 1.0
 
         torch.set_grad_enabled(True)
@@ -406,8 +411,10 @@ class Worker():
                         action_new2, _ = assign(p_matrix2.cpu().detach().numpy())
                         action_new2 = [-1 if x is None else x for x in action_new2]
                         action_new2 = torch.tensor(action_new2).to(self.device)
-                        q_value_next1 = self.AC_training.criticize(x_emb1, action_new2)
-                        q_value_next2 = self.AC_target.criticize(x_emb2, action_new1)
+                        if torch.all(action_new1 == -1) and torch.all(action_new2 == -1):
+                            continue
+                        q_value_next1 = self.AC_training.criticize(x_emb1, action_new1)
+                        q_value_next2 = self.AC_target.criticize(x_emb2, action_new2)
 
 
                         q_value_next = torch.min(q_value_next1,q_value_next2).detach()
@@ -422,7 +429,10 @@ class Worker():
                         action_new = torch.tensor(action_new).to(self.device)
                         valid_indices = (action_new != -1)
                         selected_elements = p_matrix[valid_indices, action_new[valid_indices]]
-                        log_prob = selected_elements.sum()
+
+                        # log_prob = selected_elements.sum()
+                        log_prob = selected_elements.mean()
+
                         q_new = self.AC_training.criticize(x_emb, action_new)
                         # loss_actor = - log_prob * (q_new.detach() - q_value.detach())
                         loss_actor = - log_prob * q_new.detach()
@@ -447,7 +457,10 @@ class Worker():
                         action_new = torch.tensor(action_new).to(self.device)
                         valid_indices = (action_new != -1)
                         selected_elements = p_matrix[valid_indices, action_new[valid_indices]]
-                        log_prob = selected_elements.sum()
+
+                        # log_prob = selected_elements.sum()
+                        log_prob = selected_elements.mean()
+
                         q_new = self.AC_training.criticize(x_emb, action_new)
                         # loss_actor = - log_prob * (q_new.detach() - q_value.detach())
                         loss_actor = - log_prob * q_new.detach()

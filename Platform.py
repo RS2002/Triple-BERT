@@ -4,7 +4,9 @@ from scipy.optimize import linear_sum_assignment
 import numpy as np
 
 def assign(q_matrix,pad=True):
-    threshold = -5.0
+    # threshold = -5.0
+    threshold = -10.0
+
     # Solve Bipartite Match Process with ILP
     num_vehicles, num_demands = q_matrix.shape
     if pad:

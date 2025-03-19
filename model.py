@@ -165,7 +165,7 @@ class AC_BERT(nn.Module):
         x_emb = self.encode(order, x_state, x_order, order_num)
         order = x_emb[0, x_state.shape[0]:, :]
 
-        order = order.detach()
+        # order = order.detach()
 
         p_matrix = self.actor(order)
         p_matrix = p_matrix.T
@@ -178,7 +178,7 @@ class AC_BERT(nn.Module):
     def act_emb(self, x_emb, action):
         order = x_emb[0, action.shape[0]:, :]
 
-        order = order.detach()
+        # order = order.detach()
 
         p_matrix = self.actor(order)
         p_matrix = p_matrix.T
