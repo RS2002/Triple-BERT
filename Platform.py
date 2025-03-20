@@ -33,17 +33,18 @@ def assign(q_matrix,pad=True):
 beta_list:
 beta_list[0]: reward of taking new order
 beta_list[1]: reward of user paying (proportion to distance : km)
-beta_list[2]: punishment of picking up time (user waiting time : min)
+beta_list[2]: punishment of picking up time (user waiting time : hour)
 beta_list[3]: punishment of timeout orders
 beta_list[4]: punishment of added time
 beta_list[5]: bigger punishment of added time (over threshold part)
 '''
 def reward_func_generator(beta_list, threshold):
     def reward_func(time_add,time_out,pickup_time,direct_distance):
+        # print(time_add,time_out,pickup_time,direct_distance)
         if time_add <= threshold:
-            r = beta_list[0] + beta_list[1] * direct_distance / 1000  - beta_list[2] * pickup_time - beta_list[3] * time_out - beta_list[4] * time_add
+            r = beta_list[0] + beta_list[1] * direct_distance / 1000  - beta_list[2] * pickup_time / 60 - beta_list[3] * time_out - beta_list[4] * time_add / 60
         else:
-            r = beta_list[0] + beta_list[1] * direct_distance / 1000  - beta_list[2] * pickup_time - beta_list[3] * time_out - beta_list[4] * time_add - beta_list[5] * (time_add-threshold)
+            r = beta_list[0] + beta_list[1] * direct_distance / 1000  - beta_list[2] * pickup_time / 60 - beta_list[3] * time_out - beta_list[4] * time_add / 60 - beta_list[5] * (time_add-threshold) / 60
         return r
     return reward_func
 

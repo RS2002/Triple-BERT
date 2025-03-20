@@ -2,11 +2,11 @@ import numpy as np
 import torch
 from model import AC_BERT
 from joblib import Parallel, delayed
-import torch.nn as nn
 import tqdm
 import pickle
 from transformers import BertConfig
 from Platform import assign
+import random
 
 INF = 1e8
 
@@ -286,77 +286,6 @@ class Worker():
 
         return q_value.cpu().detach().numpy(), order
 
-    # def train(self,batch_size=16, train_times=10, show_pbar=True):
-    #     torch.set_grad_enabled(True)
-    #     self.AC_training.train()
-    #     if show_pbar:
-    #         pbar = tqdm.tqdm(range(train_times))
-    #     else:
-    #         pbar = range(train_times)
-    #
-    #     loss_list = []
-    #     for _ in pbar:
-    #         loss = None
-    #         worker_state, order_state, order_num, pool_order, action, reward, worker_state_next, order_state_next, order_num_next, pool_order_next, action_next = self.buffer.sample(batch_size)
-    #         for i in range(len(worker_state)):
-    #             worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp, reward_temp, worker_state_next_temp, order_state_next_temp, order_num_next_temp, pool_order_next_temp, action_next_temp = worker_state[i], order_state[i], order_num[i], pool_order[i], action[i], reward[i], worker_state_next[i], order_state_next[i], order_num_next[i], pool_order_next[i], action_next[i]
-    #             if torch.all(action_temp == -1):
-    #                 continue
-    #             if action_next_temp is not None:
-    #                 if torch.all(action_next_temp == -1):
-    #                     continue
-    #                 worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp, worker_state_next_temp, order_state_next_temp, order_num_next_temp, pool_order_next_temp, action_next_temp = worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device), worker_state_next_temp.to(self.device), order_state_next_temp.to(self.device), order_num_next_temp.to(self.device), pool_order_next_temp.to(self.device), action_next_temp.to(self.device)
-    #                 x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
-    #                 x1_next, x2_next, x3_next = norm(pool_order_next_temp, worker_state_next_temp, order_state_next_temp)
-    #
-    #                 log_prob, q_value = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
-    #                 # print(action_next_temp)
-    #                 log_prob_next, q_value_next1 = self.AC_training(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-    #                 _, q_value_next2 = self.AC_target(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-    #                 q_value_next = torch.min(q_value_next1,q_value_next2).detach()
-    #                 target = self.gamma * q_value_next + reward_temp
-    #
-    #                 loss_critic = (target - q_value)**2
-    #                 # loss_actor = (-torch.log(prob)*q_value.detach()-torch.log(prob_next)*q_value_next1.detach())/2
-    #                 loss_actor = (-log_prob*q_value.detach()-log_prob_next*q_value_next1.detach())/2
-    #                 if loss is None:
-    #                     loss = loss_actor + loss_critic
-    #                 else:
-    #                      loss += loss_actor + loss_critic
-    #             else:
-    #                 worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp= worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device)
-    #                 x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
-    #                 log_prob, q_value = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
-    #                 target = reward_temp
-    #                 loss_critic = (target - q_value)**2
-    #                 # loss_actor = -torch.log(prob)*q_value.detach()
-    #                 loss_actor = -log_prob*q_value.detach()
-    #                 if loss is None:
-    #                     loss = loss_actor + loss_critic
-    #                 else:
-    #                      loss += loss_actor + loss_critic
-    #         if loss is not None:
-    #             loss /= batch_size
-    #             self.optim.zero_grad()
-    #             loss.backward()
-    #
-    #             has_nan = False
-    #             for name, param in self.AC_training.named_parameters():
-    #                 if param.grad is not None:
-    #                     if torch.isnan(param.grad).any():
-    #                         has_nan = True
-    #                         break
-    #             if has_nan:
-    #                 # print("NAN Gradient->Skip")
-    #                 continue
-    #             torch.nn.utils.clip_grad_norm_(self.AC_training.parameters(), 1.0)  # avoid gradient explosion
-    #
-    #             self.optim.step()
-    #             loss_list.append(loss.item())
-    #
-    #     self.update_target()
-    #     return np.mean(loss_list)
-
 
     def train(self, batch_size=8, train_times=1, show_pbar=False, train_actor=False, train_critic=True):
         actor_rate = 1.0
@@ -385,25 +314,19 @@ class Worker():
                     p_matrix, _, q_value, x_emb = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
 
                     if train_critic:
-                        # _, _, q_value_next1, _ = self.AC_training(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-                        # _, _, q_value_next2, _ = self.AC_target(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-                        # q_value_next = torch.min(q_value_next1,q_value_next2).detach()
-                        # target = self.gamma * q_value_next + reward_temp
-                        # loss_critic = (target - q_value)**2
-
                         x1_next, x2_next, x3_next = norm(pool_order_next_temp, worker_state_next_temp, order_state_next_temp)
                         p_matrix1, _, _, x_emb1 = self.AC_training(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
                         p_matrix2, _, _, x_emb2 = self.AC_target(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
 
-                        # action_new, _ = assign(p_matrix1.cpu().detach().numpy())
-                        # action_new = [-1 if x is None else x for x in action_new]
-                        # action_new = torch.tensor(action_new).to(self.device)
-                        # q_value_next1 = self.AC_training.criticize(x_emb1, action_new)
-                        # log_prob1 = self.AC_training.act_emb(x_emb1, action_new)
-                        # action_new, _ = assign(p_matrix2.cpu().detach().numpy())
-                        # action_new = [-1 if x is None else x for x in action_new]
-                        # action_new = torch.tensor(action_new).to(self.device)
-                        # q_value_next2 = self.AC_target.criticize(x_emb2, action_new)
+                        exploration_rate = random.uniform(0, 0.001)
+                        exploration_matrix = torch.rand_like(p_matrix1)
+                        p_matrix1[exploration_matrix < exploration_rate] = INF
+                        exploration_rate = random.uniform(0, 0.001)
+                        exploration_matrix = torch.rand_like(p_matrix2)
+                        p_matrix2[exploration_matrix < exploration_rate] = INF
+
+                        p_matrix1[worker_state_next_temp[:, 4] == 1] = -INF
+                        p_matrix2[worker_state_next_temp[:, 4] == 1] = -INF
 
                         action_new1, _ = assign(p_matrix1.cpu().detach().numpy())
                         action_new1 = [-1 if x is None else x for x in action_new1]
@@ -424,6 +347,7 @@ class Worker():
                         loss_critic = 0
 
                     if train_actor:
+                        p_matrix[worker_state_temp[:, 4] == 1] = -INF
                         action_new, _ = assign(p_matrix.cpu().detach().numpy())
                         action_new = [-1 if x is None else x for x in action_new]
                         action_new = torch.tensor(action_new).to(self.device)
@@ -452,6 +376,7 @@ class Worker():
                         loss_critic = 0
 
                     if train_actor:
+                        p_matrix[worker_state_temp[:, 4] == 1] = -INF
                         action_new, _ = assign(p_matrix.cpu().detach().numpy())
                         action_new = [-1 if x is None else x for x in action_new]
                         action_new = torch.tensor(action_new).to(self.device)

@@ -1,5 +1,3 @@
-from encodings.utf_8_sig import encode
-
 import torch
 import torch.nn as nn
 from transformers import BertModel, BertConfig

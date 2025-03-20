@@ -1,5 +1,3 @@
-from itertools import compress
-
 from Worker import Buffer, Worker
 from Platform import Platform, reward_func_generator, assign
 from Order_Env import Demand
@@ -16,17 +14,17 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--train_times', type=int, default=15)
     parser.add_argument('--lr', type=float, default=0.0005)
-    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--gamma', type=float, default=0.95)
     parser.add_argument('--max_step', type=int, default=60)
     parser.add_argument('--converge_epoch', type=int, default=10)
     parser.add_argument('--minimum_episode', type=int, default=1000)
     parser.add_argument('--worker_num', type=int, default=1000)
-    parser.add_argument('--buffer_capacity', type=int, default=1000)
-    parser.add_argument('--buffer_episode', type=int, default=10)
-    parser.add_argument('--demand_sample_rate', type=float, default=0.95)
+    parser.add_argument('--buffer_capacity', type=int, default=1500)
+    parser.add_argument('--buffer_episode', type=int, default=20)
+    parser.add_argument('--demand_sample_rate', type=float, default=0.99)
     parser.add_argument('--order_max_wait_time', type=float, default=5.0)
     parser.add_argument('--order_threshold', type=float, default=40.0)
-    parser.add_argument('--reward_parameter', type=float, nargs='+', default=[10.0,5.0,2.0,3.0,1.0,2.0])
+    parser.add_argument('--reward_parameter', type=float, nargs='+', default=[3.0,1.0,3.0,1.0,3.0,5.0])
 
     parser.add_argument("--day", type=int, default=17)
     parser.add_argument("--hour", type=int, default=18)
@@ -58,15 +56,23 @@ def main():
     device_name = "cuda:" + args.cuda
     device = torch.device(device_name if torch.cuda.is_available() and not args.cpu else 'cpu')
 
+    compression = args.compression
+    if compression:
+        args.max_step = args.max_step // 2
+        args.epsilon_decay_rate = np.sqrt(args.epsilon_decay_rate)
+
+
     day = args.day
     hour = args.hour
     exploration_rate = args.epsilon
     epsilon_decay_rate = args.epsilon_decay_rate
     epsilon_final = args.epsilon_final
 
-    compression = args.compression
-    if compression:
-        args.max_step = args.max_step // 2
+
+    critic_train = 4
+    actor_train = 12
+    counter = 0
+    cycle = 12
 
 
     with open(args.zone_dic_path, 'rb') as f:
@@ -83,6 +89,7 @@ def main():
     best_epoch = 0
     j = args.init_episode
     exploration_rate = max(exploration_rate * (epsilon_decay_rate**j), epsilon_final)
+
 
     while True:
         j+=1
@@ -104,11 +111,14 @@ def main():
             assignment = [x for x in assignment if x is not None]
             demand.pickup(assignment)
             demand.update()
-            if (t+1) % 4 == 0:
-                train_actor = bool((t+1)%12==0)
+
+            if (counter+1) % critic_train == 0:
+                train_actor = bool((counter+1)%actor_train==0)
                 train_critic = not train_actor
                 loss = worker.train(args.batch_size, 1, False, train_actor, train_critic)
                 loss_list.append(loss)
+            counter = (counter + 1) % cycle
+
         # loss = worker.train(args.batch_size,args.train_times)
         loss = np.mean(loss_list)
         worker.schedule.step()
