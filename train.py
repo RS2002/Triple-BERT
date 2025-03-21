@@ -14,7 +14,7 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--train_times', type=int, default=15)
     parser.add_argument('--lr', type=float, default=0.0005)
-    parser.add_argument('--gamma', type=float, default=0.95)
+    parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--max_step', type=int, default=60)
     parser.add_argument('--converge_epoch', type=int, default=10)
     parser.add_argument('--minimum_episode', type=int, default=1000)
@@ -69,10 +69,10 @@ def main():
     epsilon_final = args.epsilon_final
 
 
-    critic_train = 4
+    critic_train = 3
     actor_train = 12
     counter = 0
-    cycle = 12
+    cycle = actor_train
 
 
     with open(args.zone_dic_path, 'rb') as f:

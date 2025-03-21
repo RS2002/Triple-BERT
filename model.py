@@ -159,7 +159,7 @@ class AC_BERT(nn.Module):
         x_emb = x_emb.last_hidden_state
         return x_emb
 
-    def act(self, order, x_state, x_order, order_num=None):
+    def act(self, order, x_state, x_order, order_num=None, output_prob=False):
         x_emb = self.encode(order, x_state, x_order, order_num)
         order = x_emb[0, x_state.shape[0]:, :]
 
@@ -169,9 +169,10 @@ class AC_BERT(nn.Module):
         p_matrix = p_matrix.T
         p_matrix = self.softmax(p_matrix)
 
-        p_matrix = torch.log(p_matrix)
-
-        return p_matrix, x_emb
+        if output_prob:
+            return torch.log(p_matrix), x_emb, p_matrix
+        else:
+            return torch.log(p_matrix), x_emb
 
     def act_emb(self, x_emb, action):
         order = x_emb[0, action.shape[0]:, :]
@@ -203,6 +204,8 @@ class AC_BERT(nn.Module):
         action = action[valid_indices]
         order = order[action]
         x = torch.concat([worker,order],dim=-1).unsqueeze(0)
+
+        x = x.detach()
 
         x_emb2 = self.bert_critic(inputs_embeds=x, attention_mask=None, output_hidden_states=False)
         x_emb2 = x_emb2.last_hidden_state
