@@ -132,19 +132,74 @@ class Sequence_Classifier(nn.Module):
         res = self.classifier(flatten)
         return res
 
+class QK_Attention(nn.Module):
+    def __init__(self, input_dims=64, hidden_dims=64, head=1, dropout=0.0, method="mean"):
+        super().__init__()
+        # self.q_emb = MLP([input_dims,hidden_dims,1])
+        # self.k_emb = MLP([input_dims,hidden_dims,1])
+        self.q_linear = nn.ModuleList()
+        self.k_linear = nn.ModuleList()
+        for i in range(int(head)):
+            self.q_linear.append(MLP([input_dims,hidden_dims*2,hidden_dims*4], dropout=dropout))
+            self.k_linear.append(MLP([input_dims,hidden_dims*2,hidden_dims*4], dropout=dropout))
+        self.head = head
+        self.method = method
+        # self.softplus = nn.Softplus()
+        # self.relu = nn.ReLU()
+        if self.method != "mean":
+            self.fuse_layer = MLP([head,head,1], dropout=dropout)
+
+    def forward(self,q,k):
+        attn_matrix = None
+
+        # q_result = self.q_emb(q)
+        # k_result = self.k_emb(k)
+        # k_result = k_result.T
+        # q_result = q_result.expand(-1,k.shape[0])
+        # k_result = k_result.expand(q.shape[0],-1)
+
+        for i in range(self.head):
+            query=self.q_linear[i](q)
+            key=self.k_linear[i](k)
+
+            # key = self.softplus(key)
+            key = key ** 2
+            # key = self.relu(key)
+            norms = torch.norm(key, dim=1, keepdim=True) + 1e-8
+            key = key / norms
+            # key = torch.abs(key)
+
+            attn = torch.mm(query,key.T)
+            if self.head == 1:
+                return attn
+                # return attn + q_result + k_result
+
+            attn = attn.unsqueeze(-1)
+            if attn_matrix is None:
+                attn_matrix = attn
+            else:
+                attn_matrix = torch.concat([attn_matrix, attn],dim=-1)
+
+        if self.method == "mean":
+            attn_matrix = torch.mean(attn_matrix,dim=-1)
+        else:
+            attn_matrix = self.fuse_layer(attn_matrix)
+            attn_matrix = attn_matrix.squeeze(-1)
+        return attn_matrix
+        # return attn_matrix + q_result + k_result
 
 
-class AC_BERT(nn.Module):
-    def __init__(self, bertconfig_actor, bertconfig_critic, state_size=7, history_order_size=4, current_order_size=5, hidden_dim=64, agent_num=1000, bi_direction=False, dropout=0.0):
+class Assignment_Net(nn.Module):
+    def __init__(self, state_size=7, history_order_size=4, current_order_size=5, hidden_dim=64, bi_direction=False, dropout=0.0):
         super().__init__()
         self.worker_net = Worker_Net(state_size=state_size, order_size=history_order_size, output_dim=hidden_dim, bi_direction=bi_direction, dropout=dropout)
         self.order_net = Order_Net(state_size=current_order_size, output_size=hidden_dim, dropout=dropout)
-        self.bert_actor = BertModel(bertconfig_actor)
-        self.bert_critic = BertModel(bertconfig_critic)
+        self.attention = QK_Attention(input_dims=hidden_dim, hidden_dims=hidden_dim, head=1, dropout=dropout)
 
-        self.actor = MLP([hidden_dim,hidden_dim,agent_num], dropout=dropout)
-        self.critic = Sequence_Classifier(class_num=1, hs=hidden_dim*2, da=hidden_dim*2, r=8)
-        self.softmax = nn.Softmax(dim=-1)
+    def forward(self, order, x_state, x_order, order_num=None):
+        worker, order = self.encode(order, x_state, x_order, order_num)
+        q_matrix = self.attention(worker,order)
+        return q_matrix
 
     def encode(self, order, x_state, x_order, order_num=None):
         if order_num is not None:
@@ -154,19 +209,49 @@ class AC_BERT(nn.Module):
         x_order = x_order.float()
         order = self.order_net(order)
         worker = self.worker_net(x_state,x_order,order_num)
+        return worker, order
+
+class AC_BERT(nn.Module):
+    def __init__(self, bertconfig_actor, bertconfig_critic, state_size=7, history_order_size=4, current_order_size=5, hidden_dim=64, agent_num=1000, bi_direction=False, dropout=0.0):
+        super().__init__()
+
+        self.assignment_net = Assignment_Net(state_size, history_order_size, current_order_size, hidden_dim, bi_direction, dropout)
+        self.attention = self.assignment_net.attention
+
+        self.bert_actor = BertModel(bertconfig_actor)
+
+        self.bert_critic1 = BertModel(bertconfig_critic)
+        self.critic1 = Sequence_Classifier(class_num=1, hs=hidden_dim*2, da=hidden_dim*2, r=4)
+
+        self.bert_critic2 = BertModel(bertconfig_critic)
+        self.critic2 = Sequence_Classifier(class_num=1, hs=hidden_dim*2, da=hidden_dim*2, r=4)
+
+        self.softmax = nn.Softmax(dim=-1)
+
+    def pretrain(self, order, x_state, x_order, order_num=None):
+        return self.assignment_net(order, x_state, x_order, order_num)
+
+    def encode(self, order, x_state, x_order, order_num=None):
+        worker, order = self.assignment_net.encode(order, x_state, x_order, order_num)
         x = torch.concat([worker, order], dim=0).unsqueeze(0)
+
+        # x = x.detach()
+
         x_emb = self.bert_actor(inputs_embeds=x, attention_mask=None, output_hidden_states=False)
         x_emb = x_emb.last_hidden_state
         return x_emb
 
     def act(self, order, x_state, x_order, order_num=None, output_prob=False):
         x_emb = self.encode(order, x_state, x_order, order_num)
+
+        # x_emb2 = x_emb.clone().detach()
+        # worker = x_emb2[0, :x_state.shape[0], :]
+        # order = x_emb2[0, x_state.shape[0]:, :]
+
+        worker = x_emb[0, :x_state.shape[0], :]
         order = x_emb[0, x_state.shape[0]:, :]
 
-        # order = order.detach()
-
-        p_matrix = self.actor(order)
-        p_matrix = p_matrix.T
+        p_matrix = self.attention(worker,order)
         p_matrix = self.softmax(p_matrix)
 
         if output_prob:
@@ -174,58 +259,35 @@ class AC_BERT(nn.Module):
         else:
             return torch.log(p_matrix), x_emb
 
-    def act_emb(self, x_emb, action):
-        order = x_emb[0, action.shape[0]:, :]
-
-        # order = order.detach()
-
-        p_matrix = self.actor(order)
-        p_matrix = p_matrix.T
-        p_matrix = self.softmax(p_matrix)
-
-        p_matrix = torch.log(p_matrix)
-
-        valid_indices = (action != -1)
-        selected_elements = p_matrix[valid_indices, action[valid_indices]]
-        log_prob = selected_elements.sum()
-
-        return log_prob
 
     def criticize(self, x_emb, action):
         worker, order = x_emb[0, :action.shape[0], :], x_emb[0, action.shape[0]:, :]
-
-        # worker = worker[action!=-1]
-        # action = action[action!=-1]
-        # order = order[action]
-        # x = torch.concat([worker,order],dim=-1).unsqueeze(0)
-
         valid_indices = (action != -1)
         worker = worker[valid_indices]
         action = action[valid_indices]
         order = order[action]
         x = torch.concat([worker,order],dim=-1).unsqueeze(0)
 
-        x = x.detach()
+        # x = x.detach()
 
-        x_emb2 = self.bert_critic(inputs_embeds=x, attention_mask=None, output_hidden_states=False)
-        x_emb2 = x_emb2.last_hidden_state
-        q_value = self.critic(x_emb2)
-        return q_value
+        x_emb2_1 = self.bert_critic1(inputs_embeds=x, attention_mask=None, output_hidden_states=False)
+        x_emb2_1 = x_emb2_1.last_hidden_state
+        q_value_1 = self.critic1(x_emb2_1)
+
+        x_emb2_2 = self.bert_critic2(inputs_embeds=x, attention_mask=None, output_hidden_states=False)
+        x_emb2_2 = x_emb2_2.last_hidden_state
+        q_value_2 = self.critic2(x_emb2_2)
+
+        return [q_value_1,q_value_2]
 
     def forward(self,order,x_state,x_order,action,order_num=None):
-        # p_matrix, x_emb = self.act(order,x_state,x_order,order_num)
-        # valid_indices = (action != -1)
-        # selected_elements = p_matrix[valid_indices, action[valid_indices]]
-        # # log_mean = selected_elements.log().mean()
-        # # prob = log_mean.exp()
-        # log_prob = selected_elements.log().sum()
-
         p_matrix, x_emb = self.act(order, x_state, x_order, order_num)
         valid_indices = (action != -1)
         selected_elements = p_matrix[valid_indices, action[valid_indices]]
+
         log_prob = selected_elements.sum()
+        # log_prob = selected_elements.mean()
 
         q_value = self.criticize(x_emb,action)
 
-        # return log_prob, q_value
         return p_matrix, log_prob, q_value, x_emb

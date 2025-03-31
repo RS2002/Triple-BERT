@@ -5,7 +5,7 @@ import numpy as np
 
 def assign(q_matrix,pad=True):
     # threshold = -5.0
-    threshold = -10.0
+    threshold = -1e4
 
     # Solve Bipartite Match Process with ILP
     num_vehicles, num_demands = q_matrix.shape
@@ -94,6 +94,7 @@ class Platform():
                 self.Confirmation_Time += log[0]
                 self.Pickup_Time += log[1]
                 reward += result[0][1]
+        # print(reward)
         self.Total_Reward += self.discount_factor ** current_time * reward
         return feedback_table, new_route_table ,new_route_time_table ,new_remaining_time_table ,new_total_travel_time_table, new_detour_table, assignment, reward
 

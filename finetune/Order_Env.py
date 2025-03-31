@@ -17,8 +17,8 @@ class Demand():
     p_sample: randomly select 100p% samples from the dataset
     wait_time: the maximum waiting time of each order
     '''
-    def reset(self, day = 1, hour = 0, start_time = 0, p_sample = 0.95, wait_time = 5, compression=False):
-        self.filtered_demand = self.demand[(self.demand["day"] == day) & (self.demand["hour"] == hour)]
+    def reset(self, day = 1, hour = 0, start_time = 0, p_sample = 0.95, wait_time = 5, compression=False, max_step = 60):
+        self.filtered_demand = self.demand[(self.demand["day"] == day) & (self.demand["hour"] == hour) & (self.demand["minute"] < max_step)]
         self.filtered_demand = self.filtered_demand.sample(frac=p_sample).sort_index()
         print("total number of demand at this episode is:", len(self.filtered_demand))
 

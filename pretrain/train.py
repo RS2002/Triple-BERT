@@ -11,27 +11,26 @@ import numpy as np
 def get_args():
     parser = argparse.ArgumentParser(description='')
 
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--train_times', type=int, default=15)
-    parser.add_argument('--lr', type=float, default=0.0005)
+    parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--max_step', type=int, default=60)
+    parser.add_argument('--max_step', type=int, default=30)
     parser.add_argument('--converge_epoch', type=int, default=10)
-    parser.add_argument('--minimum_episode', type=int, default=1000)
+    parser.add_argument('--minimum_episode', type=int, default=900)
     parser.add_argument('--worker_num', type=int, default=1000)
-    parser.add_argument('--buffer_capacity', type=int, default=1500)
+    parser.add_argument('--buffer_capacity', type=int, default=500000)
     parser.add_argument('--buffer_episode', type=int, default=20)
-    parser.add_argument('--demand_sample_rate', type=float, default=0.99)
+    parser.add_argument('--demand_sample_rate', type=float, default=0.95)
     parser.add_argument('--order_max_wait_time', type=float, default=5.0)
     parser.add_argument('--order_threshold', type=float, default=40.0)
     parser.add_argument('--reward_parameter', type=float, nargs='+', default=[3.0,1.0,3.0,1.0,3.0,5.0])
+    # parser.add_argument('--reward_parameter', type=float, nargs='+', default=[5.0,3.0,4.0,2.0,1.0,3.0])
 
     parser.add_argument("--day", type=int, default=17)
-    parser.add_argument("--hour", type=int, default=18)
+    parser.add_argument("--hour", type=int, default=19)
     parser.add_argument("--compression", action="store_true",default=False)
 
-    parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument("--bi_direction", action="store_true",default=False)
     parser.add_argument('--eval_episode', type=int, default=10)
     parser.add_argument('--epsilon', type=float, default=1.0)
     parser.add_argument('--epsilon_decay_rate', type=float, default=0.99)
@@ -45,8 +44,12 @@ def get_args():
 
     parser.add_argument("--model_path",type=str,default=None)
 
-    parser.add_argument("--demand_path",type=str,default="./data/yellow_tripdata_2024-07.parquet")
-    parser.add_argument("--zone_dic_path",type=str,default="./data/Manhattan_dic.pkl")
+    parser.add_argument("--demand_path",type=str,default="../data/yellow_tripdata_2024-07.parquet")
+    parser.add_argument("--zone_dic_path",type=str,default="../data/Manhattan_dic.pkl")
+
+
+    parser.add_argument('--dropout', type=float, default=0.0)
+    parser.add_argument("--bi_direction", action="store_true",default=False)
 
     args = parser.parse_args()
     return args
@@ -56,23 +59,19 @@ def main():
     device_name = "cuda:" + args.cuda
     device = torch.device(device_name if torch.cuda.is_available() and not args.cpu else 'cpu')
 
-    compression = args.compression
-    if compression:
-        args.max_step = args.max_step // 2
-        args.epsilon_decay_rate = np.sqrt(args.epsilon_decay_rate)
-
-
     day = args.day
     hour = args.hour
     exploration_rate = args.epsilon
     epsilon_decay_rate = args.epsilon_decay_rate
     epsilon_final = args.epsilon_final
 
+    compression = args.compression
+    if compression:
+        args.max_step = args.max_step // 2
+        args.epsilon_decay_rate = np.sqrt(args.epsilon_decay_rate)
 
-    critic_train = 3
-    actor_train = 12
-    counter = 0
-    cycle = actor_train
+    train_step = 4
+    counter = 1
 
 
     with open(args.zone_dic_path, 'rb') as f:
@@ -90,15 +89,16 @@ def main():
     j = args.init_episode
     exploration_rate = max(exploration_rate * (epsilon_decay_rate**j), epsilon_final)
 
-
     while True:
         j+=1
-        exploration_rate = max(exploration_rate * epsilon_decay_rate, epsilon_final)
+        # exploration_rate = max(exploration_rate * epsilon_decay_rate, epsilon_final)
+        if j % 2 == 0:
+            exploration_rate = max(exploration_rate * epsilon_decay_rate, epsilon_final)
         print(f"Exploration Rate {exploration_rate}")
 
         worker.reset(train=True)
         platform.reset(discount_factor=args.gamma)
-        demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression)
+        demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression, max_step=args.max_step)
 
         loss_list = []
         pbar = tqdm.tqdm(range(args.max_step))
@@ -111,17 +111,15 @@ def main():
             assignment = [x for x in assignment if x is not None]
             demand.pickup(assignment)
             demand.update()
-
-            if (counter+1) % critic_train == 0:
-                train_actor = bool((counter+1)%actor_train==0)
-                train_critic = not train_actor
-                loss = worker.train(args.batch_size, 1, False, train_actor, train_critic)
+            # if (t+1) % train_step == 0 and buffer.num!=0:
+            if counter == 0 and buffer.num!=0:
+                loss = worker.train(args.batch_size, 1, False)
                 loss_list.append(loss)
-            counter = (counter + 1) % cycle
-
+            counter = (counter + 1) % train_step
         # loss = worker.train(args.batch_size,args.train_times)
         loss = np.mean(loss_list)
         worker.schedule.step()
+        # worker.update_target()
 
         Pickup_Num = platform.Pickup_Num
         Detour = np.mean(worker.Detour_Time)
@@ -139,7 +137,7 @@ def main():
         if j % args.eval_episode == 0 :
             worker.reset(train=False)
             platform.reset(discount_factor=args.gamma)
-            demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression)
+            demand.reset(day=day, hour=hour, wait_time=args.order_max_wait_time, compression=compression, max_step=args.max_step)
 
             pbar = tqdm.tqdm(range(args.max_step))
             for t in pbar:
@@ -161,7 +159,7 @@ def main():
             Delivery = np.mean(worker.Pass_Travel_Time)
             reward = platform.Total_Reward
 
-            log = f"Epoch {j} | Reward: {reward}, Served Order: {Pickup_Num} , Delivery Time: {Delivery} , Detour Time: {Detour} , Pickup Time: {Pickup} , Confirmation Time: {Confirmation}"
+            log = f"Eval {j} | Reward: {reward}, Served Order: {Pickup_Num} , Delivery Time: {Delivery} , Detour Time: {Detour} , Pickup Time: {Pickup} , Confirmation Time: {Confirmation}"
             print(log)
             with open("eval.txt", 'a') as file:
                 file.write(log + "\n")

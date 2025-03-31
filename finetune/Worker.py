@@ -7,6 +7,8 @@ import pickle
 from transformers import BertConfig
 from Platform import assign
 import random
+from torch.cuda.amp import GradScaler
+
 # torch.autograd.set_detect_anomaly(True)
 
 INF = 1e8
@@ -94,7 +96,10 @@ class Buffer():
             self.order_num_next.append(state_next[2])
             self.pooling_order_next.append(state_next[3])
             self.action_next.append(action_next)
-        self.reward.append(reward)
+        # self.reward.append(reward)
+
+        self.reward.append(reward/1000)
+
         self.episode.append(episode)
 
 
@@ -103,22 +108,29 @@ class Buffer():
             size = self.num
 
         indices = np.random.randint(0, self.num, size=size)
+        # indices = np.random.choice(self.num, size, replace=False)
+
         # priority = np.array(self.episode)
         # priority = priority - np.min(priority) + 1
         # probabilities = np.array(priority) / np.sum(priority)
-        # indices = np.random.choice(self.num, size, p=probabilities)
+        # # indices = np.random.choice(self.num, size, p=probabilities)
+        # indices = np.random.choice(self.num, size, p=probabilities, replace=False)
 
         worker_state = [self.worker_state[i] for i in indices]
         order_state = [self.order_state[i] for i in indices]
         order_num = [self.order_num[i] for i in indices]
         pool_order = [self.pooling_order[i] for i in indices]
         action = [self.action[i] for i in indices]
-        worker_state_next = [self.worker_state[i] for i in indices]
-        order_state_next = [self.order_state[i] for i in indices]
-        order_num_next = [self.order_num[i] for i in indices]
+        worker_state_next = [self.worker_state_next[i] for i in indices]
+        order_state_next = [self.order_state_next[i] for i in indices]
+        order_num_next = [self.order_num_next[i] for i in indices]
         pool_order_next = [self.pooling_order_next[i] for i in indices]
         action_next = [self.action_next[i] for i in indices]
         reward = [self.reward[i] for i in indices]
+
+        # reward_mean = np.mean(self.reward)
+        # reward_std = np.std(self.reward) + 1e-8
+        # reward = [(self.reward[i]-reward_mean)/reward_std for i in indices]
 
         return worker_state, order_state, order_num, pool_order, action, reward, worker_state_next, order_state_next, order_num_next, pool_order_next, action_next
 
@@ -163,7 +175,7 @@ def norm(order_state, worker_state, history_order_state, lat_min = 40.6887842155
     return order_state, worker_state, history_order_state
 
 class Worker():
-    def __init__(self, buffer, lr=0.0001, gamma=0.99, max_step=60, num=1000, device=None, zone_table_path = "./data/Manhattan_dic.pkl", model_path = None, njobs = 24, bi_direction = True, dropout = 0.0, compression = False):
+    def __init__(self, buffer, lr=0.0001, gamma=0.99, max_step=60, num=1000, device=None, zone_table_path = "./data/Manhattan_dic.pkl", model_path = None, njobs = 24, bi_direction = True, dropout = 0.0, compression = False, pretrain_model_path = None):
         super().__init__()
         self.buffer = buffer
 
@@ -184,11 +196,14 @@ class Worker():
         else:
             max_len = 1500
 
-        bertconfig_actor = BertConfig(max_position_embeddings=max_len, hidden_size=64, num_hidden_layers=4, num_attention_heads=4, position_embedding_type="none")
-        bertconfig_critic = BertConfig(max_position_embeddings=1000, hidden_size=128, num_hidden_layers=4, num_attention_heads=4, position_embedding_type="none")
+        bertconfig_actor = BertConfig(max_position_embeddings=max_len, hidden_size=64, num_hidden_layers=3, num_attention_heads=4, position_embedding_type="none")
+        bertconfig_critic = BertConfig(max_position_embeddings=1000, hidden_size=128, num_hidden_layers=3, num_attention_heads=4, position_embedding_type="none")
 
         self.AC_training = AC_BERT(bertconfig_actor, bertconfig_critic, state_size=6, history_order_size=5, current_order_size=5, hidden_dim=64, agent_num=1000, bi_direction=bi_direction, dropout=dropout).to(device)
         self.AC_target = AC_BERT(bertconfig_actor, bertconfig_critic, state_size=6, history_order_size=5, current_order_size=5, hidden_dim=64, agent_num=1000, bi_direction=bi_direction, dropout=dropout).to(device)
+
+        if pretrain_model_path is not None:
+            self.load_pretrain(pretrain_model_path,self.device)
 
         self.load(model_path,self.device)
         for param in self.AC_target.parameters():
@@ -199,11 +214,19 @@ class Worker():
 
         self.optim = torch.optim.Adam(self.AC_training.parameters(), lr=lr, weight_decay=0)
 
-        if compression:
-            self.schedule = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=np.sqrt(0.99))
-        else:
-            self.schedule = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=0.99)
+        # self.optim_a = torch.optim.Adam(self.AC_training.parameters(), lr=lr/5, weight_decay=0)
+        # if compression:
+        #     self.schedule = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=np.sqrt(0.99))
+        #     self.schedule_a = torch.optim.lr_scheduler.ExponentialLR(self.optim_a, gamma=np.sqrt(0.99))
+        # else:
+        #     self.schedule = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=0.99)
+        #     self.schedule_a = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=0.99)
+
+        self.schedule = torch.optim.lr_scheduler.ExponentialLR(self.optim, gamma=0.99)
+
         self.njobs = njobs
+
+        self.scaler = GradScaler()
 
         self.reset()
 
@@ -213,12 +236,22 @@ class Worker():
     def load(self, path1=None, device=torch.device("cpu")):
         if device == torch.device("cpu"):
             if path1 is not None:
-                self.AC_target.load_state_dict(torch.load(path1, map_location=torch.device('cpu')))
-                self.AC_training.load_state_dict(torch.load(path1, map_location=torch.device('cpu')))
+                self.AC_target.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
+                self.AC_training.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
         else:
             if path1 is not None:
-                self.AC_target.load_state_dict(torch.load(path1))
-                self.AC_training.load_state_dict(torch.load(path1))
+                self.AC_target.load_state_dict(torch.load(path1, weights_only=True))
+                self.AC_training.load_state_dict(torch.load(path1, weights_only=True))
+
+    def load_pretrain(self, path1=None, device=torch.device("cpu")):
+        if device == torch.device("cpu"):
+            if path1 is not None:
+                self.AC_target.assignment_net.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
+                self.AC_training.assignment_net.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
+        else:
+            if path1 is not None:
+                self.AC_target.assignment_net.load_state_dict(torch.load(path1, weights_only=True))
+                self.AC_training.assignment_net.load_state_dict(torch.load(path1, weights_only=True))
 
     def update_target(self, tau=0.005):
         for target_param, train_param in zip(self.AC_target.parameters(), self.AC_training.parameters()):
@@ -287,13 +320,17 @@ class Worker():
         # 1. calculate q-value
         x1, x2, x3 = norm(order, self.observe_space, self.current_orders)
         x1, x2, x3 = torch.tensor(x1).to(self.device), torch.tensor(x2).to(self.device), torch.tensor(x3).to(self.device)
-        q_value, _ = self.AC_training.act(x1, x2, x3, torch.from_numpy(self.current_order_num).to(self.device))
+        p_matrix, _ = self.AC_training.act(x1, x2, x3, torch.from_numpy(self.current_order_num).to(self.device))
         # 2. epsilon-greedy explore
-        exploration_matrix = torch.rand_like(q_value)
-        q_value[exploration_matrix < exploration_rate] = INF
-        q_value[self.observe_space[:, 4] == 1] = -INF
+        exploration_matrix = torch.rand_like(p_matrix)
 
-        return q_value.cpu().detach().numpy(), order
+        # threshold = np.log(1 / len(order))
+        # p_matrix[p_matrix<threshold] = -INF
+
+        p_matrix[exploration_matrix < exploration_rate] = INF
+        p_matrix[self.observe_space[:, 4] == 1] = -INF
+
+        return p_matrix.cpu().detach().numpy(), order
 
 
     def train(self, batch_size=8, train_times=1, show_pbar=False, train_actor=False, train_critic=True):
@@ -314,125 +351,101 @@ class Worker():
             for i in range(len(worker_state)):
                 worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp, reward_temp, worker_state_next_temp, order_state_next_temp, order_num_next_temp, pool_order_next_temp, action_next_temp = worker_state[i], order_state[i], order_num[i], pool_order[i], action[i], reward[i], worker_state_next[i], order_state_next[i], order_num_next[i], pool_order_next[i], action_next[i]
                 if torch.all(action_temp == -1):
+                    print("No action_temp")
                     continue
-                if action_next_temp is not None:
-                    # if train_critic and torch.all(action_next_temp == -1):
-                    #     continue
-                    worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp, worker_state_next_temp, order_state_next_temp, order_num_next_temp, pool_order_next_temp, action_next_temp = worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device), worker_state_next_temp.to(self.device), order_state_next_temp.to(self.device), order_num_next_temp.to(self.device), pool_order_next_temp.to(self.device), action_next_temp.to(self.device)
-                    x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
-                    # p_matrix, _, q_value, x_emb = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
 
-                    if train_critic:
+                if train_critic:
+                    if action_next_temp is not None:
+
+                        worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp, worker_state_next_temp, order_state_next_temp, order_num_next_temp, pool_order_next_temp, action_next_temp = worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device), worker_state_next_temp.to(self.device), order_state_next_temp.to(self.device), order_num_next_temp.to(self.device), pool_order_next_temp.to(self.device), action_next_temp.to(self.device)
+                        x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
                         _, _, q_value, _ = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
 
                         x1_next, x2_next, x3_next = norm(pool_order_next_temp, worker_state_next_temp, order_state_next_temp)
-                        # p_matrix1, _, _, x_emb1 = self.AC_training(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-                        # p_matrix2, _, _, x_emb2 = self.AC_target(x1_next, x2_next, x3_next, action_next_temp, order_num_next_temp)
-                        p_matrix1, x_emb1 = self.AC_training.act(x1_next, x2_next, x3_next, order_num_next_temp)
                         p_matrix2, x_emb2 = self.AC_target.act(x1_next, x2_next, x3_next, order_num_next_temp)
 
-                        exploration_rate = random.uniform(0, 0.01)
-                        exploration_matrix = torch.rand_like(p_matrix1)
-                        p_matrix1[exploration_matrix < exploration_rate] = INF
+                        # threshold = np.log(1 / len(pool_order_next_temp))
+                        # p_matrix2[p_matrix2 < threshold] = -INF
+
                         exploration_rate = random.uniform(0, 0.01)
                         exploration_matrix = torch.rand_like(p_matrix2)
                         p_matrix2[exploration_matrix < exploration_rate] = INF
-
-                        p_matrix1[worker_state_next_temp[:, 4] == 1] = -INF
                         p_matrix2[worker_state_next_temp[:, 4] == 1] = -INF
 
-                        action_new1, _ = assign(p_matrix1.cpu().detach().numpy())
-                        action_new1 = [-1 if x is None else x for x in action_new1]
-                        action_new1 = torch.tensor(action_new1).to(self.device)
                         action_new2, _ = assign(p_matrix2.cpu().detach().numpy())
                         action_new2 = [-1 if x is None else x for x in action_new2]
                         action_new2 = torch.tensor(action_new2).to(self.device)
-                        if torch.all(action_new1 == -1) and torch.all(action_new2 == -1):
+                        if torch.all(action_new2 == -1):
+                            print("No action_next")
                             continue
 
-                        # q_value_next1 = self.AC_training.criticize(x_emb1, action_new1)
-                        # q_value_next2 = self.AC_target.criticize(x_emb2, action_new2)
+                        q_value_next2 = self.AC_target.criticize(x_emb2, action_new2)
 
-                        q_value_next1 = self.AC_training.criticize(x_emb1, action_new2)
-                        q_value_next2 = self.AC_target.criticize(x_emb2, action_new1)
-
-                        q_value_next = torch.min(q_value_next1,q_value_next2).detach()
+                        q_value_next = torch.min(q_value_next2[0], q_value_next2[1]).detach()
                         target = self.gamma * q_value_next + reward_temp
 
-                        loss_critic = (target - q_value)**2
-                    else:
-                        loss_critic = 0
-
-                    if train_actor:
-
-                        p_matrix, x_emb, p_ori = self.AC_training.act(x1, x2, x3, order_num_temp, True)
-                        # entropy = calculate_entropy(p_matrix, p_ori)
-
-                        p_matrix_clone = p_matrix.clone()
-                        p_matrix_clone[worker_state_temp[:, 4] == 1] = -INF
-                        action_new, _ = assign(p_matrix_clone.cpu().detach().numpy())
-                        action_new = [-1 if x is None else x for x in action_new]
-                        action_new = torch.tensor(action_new).to(self.device)
-                        valid_indices = (action_new != -1)
-                        selected_elements = p_matrix[valid_indices, action_new[valid_indices]]
-
-                        # log_prob = selected_elements.sum()
-                        log_prob = selected_elements.mean()
-
-                        q_new = self.AC_training.criticize(x_emb, action_new)
-                        loss_actor = - log_prob * q_new.detach()
-
-                        # loss_actor = loss_actor - entropy_rate * entropy
+                        loss_critic = (target - q_value[0])**2 + (target - q_value[1])**2
 
                     else:
-                        loss_actor = 0
+                        worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp= worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device)
+                        x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
+                        _, _, q_value, _ = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
+                        target = reward_temp
+                        loss_critic = (target - q_value[0])**2 + (target - q_value[1])**2
+                else:
+                    loss_critic = 0
+
+                if train_actor:
+                    worker_state_temp, order_state_temp, order_num_temp, pool_order_temp = worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device)
+                    x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
+                    p_matrix, x_emb, p_ori = self.AC_training.act(x1, x2, x3, order_num_temp, True)
+                    # entropy = calculate_entropy(p_matrix, p_ori)
+
+                    p_matrix_clone = p_matrix.clone()
+                    p_matrix_clone[worker_state_temp[:, 4] == 1] = -INF
+                    action_new, _ = assign(p_matrix_clone.cpu().detach().numpy())
+                    action_new = [-1 if x is None else x for x in action_new]
+                    action_new = torch.tensor(action_new).to(self.device)
+                    if torch.all(action_new == -1):
+                        print("No new action_temp")
+                        continue
+                    valid_indices = (action_new != -1)
+                    selected_elements = p_matrix[valid_indices, action_new[valid_indices]]
+
+                    entropy = calculate_entropy(p_matrix[valid_indices], p_ori[valid_indices])
+
+                    log_prob = selected_elements.sum()
+                    # log_prob = selected_elements.mean()
+
+                    q_new = self.AC_training.criticize(x_emb, action_new)
+                    # q_new = (q_new[0] + q_new[1]) / 2
+                    q_new = q_new[0]
+                    loss_actor = - log_prob * q_new.detach()
+
+                    loss_actor = loss_actor - entropy_rate * entropy
 
                 else:
-                    worker_state_temp, order_state_temp, order_num_temp, pool_order_temp, action_temp= worker_state_temp.to(self.device), order_state_temp.to(self.device), order_num_temp.to(self.device), pool_order_temp.to(self.device), action_temp.to(self.device)
-                    x1, x2, x3 = norm(pool_order_temp, worker_state_temp, order_state_temp)
-                    # p_matrix, _, q_value, x_emb = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
-
-                    if train_critic:
-                        _, _, q_value, _ = self.AC_training(x1, x2, x3, action_temp, order_num_temp)
-
-                        target = reward_temp
-                        loss_critic = (target - q_value)**2
-                    else:
-                        loss_critic = 0
-
-                    if train_actor:
-                        p_matrix, x_emb, p_ori = self.AC_training.act(x1, x2, x3, order_num_temp, True)
-                        # entropy = calculate_entropy(p_matrix, p_ori)
-
-                        p_matrix_clone = p_matrix.clone()
-                        p_matrix_clone[worker_state_temp[:, 4] == 1] = -INF
-                        action_new, _ = assign(p_matrix_clone.cpu().detach().numpy())
-                        action_new = [-1 if x is None else x for x in action_new]
-                        action_new = torch.tensor(action_new).to(self.device)
-                        valid_indices = (action_new != -1)
-                        selected_elements = p_matrix[valid_indices, action_new[valid_indices]]
-
-                        # log_prob = selected_elements.sum()
-                        log_prob = selected_elements.mean()
-
-                        q_new = self.AC_training.criticize(x_emb, action_new)
-                        loss_actor = - log_prob * q_new.detach()
-
-                        # loss_actor = loss_actor - entropy_rate * entropy
-
-                    else:
-                        loss_actor = 0
+                    loss_actor = 0
 
                 if loss is None:
                     loss = loss_actor * actor_rate + loss_critic
                 else:
-                    loss += loss_actor * actor_rate+ loss_critic
+                    loss += loss_actor * actor_rate + loss_critic
 
             if loss is not None:
                 loss /= batch_size
-                self.optim.zero_grad()
-                loss.backward()
+                loss_list.append(loss.item())
 
+                # if train_critic:
+                #     self.optim.zero_grad()
+                # elif train_actor:
+                #     self.optim_a.zero_grad()
+                self.optim.zero_grad()
+
+                # loss.backward()
+                self.scaler.scale(loss).backward()  # 缩放损失并反向传播
+
+                torch.nn.utils.clip_grad_norm_(self.AC_training.parameters(), 1.0)  # avoid gradient explosion
                 has_nan = False
                 for name, param in self.AC_training.named_parameters():
                     if param.grad is not None:
@@ -440,12 +453,17 @@ class Worker():
                             has_nan = True
                             break
                 if has_nan:
-                    # print("NAN Gradient->Skip")
+                    print("NAN Gradient->Skip")
                     continue
-                torch.nn.utils.clip_grad_norm_(self.AC_training.parameters(), 1.0)  # avoid gradient explosion
 
-                self.optim.step()
-                loss_list.append(loss.item())
+                # if train_critic:
+                #     self.optim.step()
+                # elif train_actor:
+                #     self.optim_a.step()
+                # self.optim.step()
+
+                self.scaler.step(self.optim)  # 先unscale梯度，再更新参数（跳过溢出情况）
+                self.scaler.update()  # 调整缩放因子
 
         if train_actor:
             self.update_target()
@@ -458,7 +476,7 @@ class Worker():
         results = Parallel(n_jobs=self.njobs)(
             delayed(single_update)(self.observe_space[i], self.current_orders[i], self.current_order_num[i], self.travel_route[i], self.travel_time[i], feedback_table[i], new_route_table[i], new_route_time_table[i], new_remaining_time_table[i], new_total_travel_time_table[i], new_detour_table[i])
             for i in range(self.num))
-        if self.train:
+        if self.is_train:
             assignment_table = [-1 if x is None else x for x in assignment_table]
             state = [self.observe_space.copy(),self.current_orders.copy(),self.current_order_num.copy(),assignment_state]
             action = assignment_table
@@ -469,7 +487,7 @@ class Worker():
                 self.experience = [state, action, reward]
             else:
                 self.experience.append(reward)
-            if final_step:
+            if final_step and len(self.experience)>0:
                 self.experience.append([None,None,None,None])
                 self.experience.append(None)
                 self.buffer.append(self.experience,episode)
@@ -507,6 +525,7 @@ def single_update(observe_space, current_orders, current_orders_num, current_tra
     if observe_space[3] != 0:  # pick up
         if observe_space[3] > step:
             observe_space[3] -= step
+            step = 0
         else:  # finish picking up
             step -= observe_space[3]
             observe_space[3] = 0
