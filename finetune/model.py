@@ -252,7 +252,7 @@ class AC_BERT(nn.Module):
         order = x_emb[0, x_state.shape[0]:, :]
 
         p_matrix = self.attention(worker,order)
-        p_matrix = self.softmax(p_matrix)
+        p_matrix = self.softmax(p_matrix) + 1e-8
 
         if output_prob:
             return torch.log(p_matrix), x_emb, p_matrix
