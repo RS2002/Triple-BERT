@@ -1,6 +1,6 @@
 # Triple-BERT
 
-**Article:** Zijian Zhao, Sen Li*, "Triple-BERT: Do We Really Need MARL in Large-Scale Order Dispatching?" (under way)
+**Article:** "Triple-BERT: Do We Really Need MARL in Large-Scale Order Dispatching?" (under review)
 
 
 
