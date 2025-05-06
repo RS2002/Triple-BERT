@@ -37,7 +37,7 @@ python train.py --bi_direction
 To run Stage 2, execute the following command in the `./finetune` directory:
 
 ```shell
-python train.py --bi_direction --pretrain_model_path <the trained model path in stage 1>
+python train.py --bi_direction --pretrain_model_path <path_to_trained_model_from_stage_1>
 ```
 
 

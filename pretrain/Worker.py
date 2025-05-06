@@ -197,14 +197,9 @@ class Worker():
         torch.save(self.Q_training.state_dict(), path)
 
     def load(self, path1=None, device=torch.device("cpu")):
-        if device == torch.device("cpu"):
-            if path1 is not None:
-                self.Q_target.load_state_dict(torch.load(path1, map_location=torch.device('cpu')))
-                self.Q_training.load_state_dict(torch.load(path1, map_location=torch.device('cpu')))
-        else:
-            if path1 is not None:
-                self.Q_target.load_state_dict(torch.load(path1))
-                self.Q_training.load_state_dict(torch.load(path1))
+        if path1 is not None:
+            self.Q_target.load_state_dict(torch.load(path1), map_location=device, strict=False)
+            self.Q_training.load_state_dict(torch.load(path1), map_location=device, strict=False)
 
     def update_target(self, tau=0.005):
         for target_param, train_param in zip(self.Q_target.parameters(), self.Q_training.parameters()):

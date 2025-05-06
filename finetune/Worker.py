@@ -234,24 +234,14 @@ class Worker():
         torch.save(self.AC_training.state_dict(), path)
 
     def load(self, path1=None, device=torch.device("cpu")):
-        if device == torch.device("cpu"):
-            if path1 is not None:
-                self.AC_target.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
-                self.AC_training.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
-        else:
-            if path1 is not None:
-                self.AC_target.load_state_dict(torch.load(path1, weights_only=True))
-                self.AC_training.load_state_dict(torch.load(path1, weights_only=True))
+        if path1 is not None:
+            self.Q_target.load_state_dict(torch.load(path1), map_location=device, strict=False)
+            self.Q_training.load_state_dict(torch.load(path1), map_location=device, strict=False)
 
     def load_pretrain(self, path1=None, device=torch.device("cpu")):
-        if device == torch.device("cpu"):
-            if path1 is not None:
-                self.AC_target.assignment_net.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
-                self.AC_training.assignment_net.load_state_dict(torch.load(path1, map_location=torch.device('cpu'), weights_only=True))
-        else:
-            if path1 is not None:
-                self.AC_target.assignment_net.load_state_dict(torch.load(path1, weights_only=True))
-                self.AC_training.assignment_net.load_state_dict(torch.load(path1, weights_only=True))
+        if path1 is not None:
+            self.AC_target.assignment_net.load_state_dict(torch.load(path1, map_location=device, weights_only=True))
+            self.AC_training.assignment_net.load_state_dict(torch.load(path1, map_location=device, weights_only=True))
 
     def update_target(self, tau=0.005):
         for target_param, train_param in zip(self.AC_target.parameters(), self.AC_training.parameters()):
