@@ -1,6 +1,6 @@
 # Triple-BERT
 
-**Article:** "Triple-BERT: Do We Really Need MARL in Large-Scale Order Dispatching?" (under review)
+**Article:** "Triple-BERT: Do We Really Need MARL for Order Dispatch on Ride-Sharing Platforms?" (under review)
 
 
 
