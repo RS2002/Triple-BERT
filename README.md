@@ -55,11 +55,11 @@ The model parameters and training log files for both Stage 1 and Stage 2 are loc
 ## 5. Reference
 
 ```
-@article{zhao2025triple,
+@inproceedings{zhao2026triple,
   title={Triple-BERT: Do We Really Need MARL for Order Dispatch on Ride-Sharing Platforms?},
   author={Zhao, Zijian and Li, Sen},
-  journal={arXiv preprint arXiv:2510.03257},
-  year={2025}
+  booktitle={The Fourteenth International Conference on Learning Representations},
+  year={2026}
 }
 ```
 

@@ -48,6 +48,10 @@ def get_args():
     parser.add_argument("--demand_path",type=str,default="../data/yellow_tripdata_2024-07.parquet")
     parser.add_argument("--zone_dic_path",type=str,default="../data/Manhattan_dic.pkl")
 
+    parser.add_argument('--rand_init', action="store_true", default=False)
+    parser.add_argument('--restrict', action="store_true", default=False)
+    parser.add_argument('--noise_type', type=int, default=0)
+
     args = parser.parse_args()
     return args
 
@@ -82,7 +86,7 @@ def main():
     platform = Platform(discount_factor=args.gamma, njobs=args.njobs)
     demand = Demand(demand_path=args.demand_path, zone_table=zone_table)
     buffer = Buffer(capacity=args.buffer_capacity, episode_capacity=args.buffer_episode)
-    worker = Worker(buffer, lr=args.lr, gamma=args.gamma, max_step=args.max_step, num=args.worker_num, device=device, zone_table_path = args.zone_dic_path, model_path = args.model_path, njobs = args.njobs, bi_direction = args.bi_direction, dropout = args.dropout, compression = compression, pretrain_model_path=args.pretrain_model_path)
+    worker = Worker(buffer, lr=args.lr, gamma=args.gamma, max_step=args.max_step, num=args.worker_num, device=device, zone_table_path = args.zone_dic_path, model_path = args.model_path, njobs = args.njobs, bi_direction = args.bi_direction, dropout = args.dropout, compression = compression, pretrain_model_path=args.pretrain_model_path, rand_init = args.rand_init, restrict = args.restritct, noise_type = args.noise_type)
     reward_func = reward_func_generator(args.reward_parameter, args.order_threshold)
 
     best_reward = -1e8
