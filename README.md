@@ -1,6 +1,6 @@
 # Triple-BERT
 
-**Article:** Zijian Zhao, Sen Li*, "[Triple-BERT: Do We Really Need MARL for Order Dispatch on Ride-Sharing Platforms?](https://openreview.net/forum?id=symgW6FhA6)", 2026 International Conference on Learning Representations (ICLR), 2026
+**Article:** Zijian Zhao, Sen Li*, "[Triple-BERT: Do We Really Need MARL for Order Dispatch on Ride-Sharing Platforms?](https://openreview.net/forum?id=symgW6FhA6)", 2026 International Conference on Learning Representations (ICLR oral), 2026
 
 
 
